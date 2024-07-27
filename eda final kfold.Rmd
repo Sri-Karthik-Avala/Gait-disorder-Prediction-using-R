@@ -1,0 +1,124 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(randomForest)
+library(class)
+library(e1071)
+library(naivebayes)
+library(keras)
+
+
+# Load the data from CSV files
+mtrain <- read.csv("C:/Users/srika/OneDrive/Documents/xtrain.csv")
+mtest <- read.csv("C:/Users/srika/OneDrive/Documents/xtest.csv")
+y_train <- read.csv("C:/Users/srika/OneDrive/Documents/ytrain.csv")
+y_test <- read.csv("C:/Users/srika/OneDrive/Documents/ytest.csv")
+```
+
+```{r}
+# Extract features and labels
+x_train <- as.matrix(mtrain)
+x_test <- as.matrix(mtest)
+y_train <- y_train$x
+y_test <- y_test$x
+
+# Preprocess labels: Classify K, A, C, H as 1 (GD) and HC as 0
+y_train_processed <- ifelse(y_train %in% c("K", "A", "C", "H"), 1, 0)
+y_test_processed <- ifelse(y_test %in% c("K", "A", "C", "H"), 1, 0)
+
+# Convert string labels to numerical labels
+y_train_encoded <- as.numeric(factor(y_train_processed))
+y_test_encoded <- as.numeric(factor(y_test_processed))
+
+num_classes <- length(unique(y_train_encoded))
+y_train_onehot <- to_categorical(y_train_encoded - 1, num_classes = num_classes)
+x_train_cnn <- array_reshape(x_train, c(dim(x_train), 1))
+x_test_cnn <- array_reshape(x_test, c(dim(x_test), 1))
+
+```
+
+
+```{r}
+library(keras)
+library(caret)
+
+# Define number of classes
+num_classes <- 2  # Assuming binary classification
+num_folds = 2
+# Define function to create CNN model
+create_cnn_model <- function(input_shape, num_classes) {
+  model <- keras_model_sequential() %>%
+    layer_conv_1d(filters = 32, kernel_size = 3, activation = "relu", input_shape = dim(x_train_cnn)[2:3]) %>%
+    layer_max_pooling_1d(pool_size = 1) %>%
+    layer_conv_1d(filters = 64, kernel_size = 3, activation = "relu") %>%
+    layer_max_pooling_1d(pool_size = 1) %>%
+    layer_conv_1d(filters = 128, kernel_size = 3, activation = "relu") %>%
+    layer_max_pooling_1d(pool_size = 1) %>%
+    layer_conv_1d(filters = 256, kernel_size = 3, activation = "relu") %>%
+    layer_max_pooling_1d(pool_size = 1) %>%
+    layer_conv_1d(filters = 512, kernel_size = 3, activation = "relu") %>%
+    layer_max_pooling_1d(pool_size = 1) %>%
+    layer_conv_1d(filters = 1024, kernel_size = 3, activation = "relu") %>%
+    layer_max_pooling_1d(pool_size = 1) %>%
+    layer_flatten() %>%
+    layer_dense(units = 512, activation = "relu") %>%
+    layer_dense(units = 256, activation = "relu") %>%
+    layer_dense(units = 128, activation = "relu") %>%
+    layer_dense(units = 64, activation = "relu") %>%
+    layer_dense(units = 32, activation = "relu") %>%
+    layer_dense(units = num_classes, activation = "softmax")
+  
+  model %>% compile(
+    optimizer = optimizer_adam(),
+    loss = "binary_crossentropy",
+    metrics = c("accuracy")
+  )
+  
+  return(model)
+}
+
+# Create data partitions for k-fold cross-validation
+folds <- createFolds(y_train_encoded, k = num_folds)
+
+# Initialize vector to store fold accuracies
+fold_accuracies <- numeric(num_folds)
+
+# Perform k-fold cross-validation
+for (fold in 1:num_folds) {
+  cat("Processing fold", fold, "\n")
+  
+  # Extract training and validation data for current fold
+  train_indices <- unlist(folds[-fold])
+  validation_indices <- unlist(folds[fold])
+  x_train_fold <- x_train_cnn[train_indices,,]
+  y_train_fold <- y_train_onehot[train_indices,]
+  x_val_fold <- x_train_cnn[validation_indices,,]
+  y_val_fold <- y_train_onehot[validation_indices,]
+  
+  # Create and compile CNN model
+  cnn_model <- create_cnn_model(input_shape = c(dim(x_train_fold)[2], dim(x_train_fold)[3]), num_classes = num_classes)
+  
+  # Early stopping
+  callback <- callback_early_stopping(monitor = "val_loss", patience = 10)
+  
+  # Train CNN model
+  history <- cnn_model %>% fit(
+    x_train_fold, y_train_fold, 
+    epochs = 50, batch_size = 16, 
+    validation_data = list(x_val_fold, y_val_fold), 
+    callbacks = list(callback)
+  )
+  
+  # Evaluate CNN model on current fold
+  fold_predictions <- cnn_model %>% predict(x_val_fold)
+  fold_accuracy <- sum(apply(fold_predictions, 1, which.max) == which.max(y_val_fold), na.rm = TRUE) / length(y_val_fold)
+  cat("Fold", fold, "Accuracy:", fold_accuracy, "\n")
+  fold_accuracies[fold] <- fold_accuracy
+}
+
+```
+
+

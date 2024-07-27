@@ -1,0 +1,400 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+---
+title: "EDA Project - Test 1"
+author: "Sri Karthik"
+date: "05/02/2024"
+output: html_document
+---
+
+#Installing required Packages
+
+# Tidyverse package
+if(!require(tidyverse)) 
+  install.packages("tidyverse", repos="http://cran.us.r-project.org")
+
+# Caret package
+if(!require(caret)) 
+  install.packages("caret", repos="http://cran.us.r-project.org")
+
+# Rborist package
+if(!require(Rborist)) 
+  install.packages("Rborist", repos="http://cran.us.r-project.org")
+
+# MatrixStats package
+if(!require(matrixStats)) 
+  install.packages("matrixStats", repos="http://cran.us.r-project.org")
+
+# Ggplot2 package
+if(!require(ggplot2)) 
+  install.packages("ggplot2", repos="http://cran.us.r-project.org")
+
+# Kernlab package
+if(!require(kernlab)) 
+  install.packages("kernlab", repos="http://cran.us.r-project.org")
+
+# Knitr package
+if(!require(knitr)) 
+  install.packages("knitr", repos="http://cran.us.r-project.org")
+
+# Readxl package
+if(!require(readxl)) 
+  install.packages("readxl", repos="http://cran.us.r-project.org")
+options(digits = 3)
+
+
+# Load Left Data
+
+```{r}
+grf_v_left <- read.csv(file = "C:/Users/srika/Downloads/EDA Project/PRO/GRF_F_V_PRO_left.csv") 
+
+grf_ap_left <- read.csv(file = "C:/Users/srika/Downloads/EDA Project/PRO/GRF_F_AP_PRO_left.csv") 
+
+grf_ml_left <- read.csv(file = "C:/Users/srika/Downloads/EDA Project/PRO/GRF_F_ML_PRO_left.csv")
+```
+
+# Load Right Data
+
+```{r}
+grf_v_right <- read.csv(file = "C:/Users/srika/Downloads/EDA Project/PRO/GRF_F_V_PRO_right.csv") 
+
+grf_ap_right <- read.csv(file = "C:/Users/srika/Downloads/EDA Project/PRO/GRF_F_AP_PRO_right.csv") 
+
+grf_ml_right <- read.csv(file = "C:/Users/srika/Downloads/EDA Project/PRO/GRF_F_ML_PRO_right.csv")
+```
+
+# Load metadata and also the column which contains values (0,1,2,na) are replaced with (Left,Right,Both,None)
+
+```{r,error=FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+
+meta <- read.csv(file = "C:/Users/srika/Downloads/EDA Project/GRF_metadata.csv") %>% 
+          mutate(CLASS_LABEL = factor(CLASS_LABEL)) %>%
+          mutate(AFFECTED_SIDE = case_when(AFFECTED_SIDE == 0 ~ "LEFT",
+                                           AFFECTED_SIDE == 1 ~ "RIGHT",
+                                           AFFECTED_SIDE == 2 ~ "BOTH",
+                                           is.na(AFFECTED_SIDE) ~ "NONE")) %>%
+          mutate(AFFECTED_SIDE = factor(AFFECTED_SIDE))
+```
+
+The GRF in the vertical, anteroposterior, and mediolateral directions are binded
+with subject, session, and trial identifiers. Hence, *grf_left* and *grf_right* is a 306-column 
+matrix that contains the 303 GRF and three identifiers.
+
+```{r}
+join_vars <- c("SUBJECT_ID","SESSION_ID","TRIAL_ID")
+
+grf_left <- grf_v_left %>% inner_join(grf_ap_left,by = join_vars) %>%
+                inner_join(grf_ml_left,by = join_vars) 
+
+grf_right <- grf_v_right %>% inner_join(grf_ap_right,by = join_vars) %>%
+                inner_join(grf_ml_right,by = join_vars)
+```
+
+*grf_left* and *grf_right* is binded with the metadata to obtain the data frame *dataset*, which will be used to apply the machine learning algorithms.
+
+```{r}
+# Combine left and right datasets
+combined_grf <- inner_join(grf_left, grf_right, by = join_vars, suffix = c("_left", "_right"))
+
+# Combine with metadata
+dataset <- meta %>%
+  select(SUBJECT_ID, SESSION_ID, CLASS_LABEL, AFFECTED_SIDE, SESSION_TYPE, TRAIN_BALANCED, TEST) %>%
+  inner_join(combined_grf, by = c("SUBJECT_ID", "SESSION_ID")) %>%
+  filter(AFFECTED_SIDE %in% c("LEFT", "RIGHT", "NONE", "BOTH")) %>%
+  filter(SESSION_TYPE == 1)
+
+```
+
+```{r}
+meta %>% group_by(CLASS_LABEL) %>% summarise(n = n_distinct(SUBJECT_ID)) %>%
+  rename("Class" = CLASS_LABEL, "Number of participants" = n) %>%
+  knitr::kable(align = 'c')
+```
+
+
+The following code creates a function that calculates the mean and the 
+confidence interval for the forces in a given direction (vertical, 
+anteroposterior, or mediolateral).
+
+```{r}
+ci_forces <- function(data,colforces) {
+  # Rename the columns with the forces with the numbers from 1 to 101
+  colnames(data)[colforces] <- 1:101
+  data %>%
+  gather(key = "TIME", value = "FORCE", all_of(colforces)) %>%
+    mutate(TIME = as.numeric(TIME)) %>%
+    group_by(CLASS_LABEL,TIME) %>%
+    summarise(MEAN = mean(FORCE), 
+              LOWER = MEAN - 1.96*sd(FORCE),
+              UPPER = MEAN + 1.96*sd(FORCE)) %>%
+    gather(key = "TYPE", value = "VALUE", c("MEAN","LOWER", "UPPER"))
+}
+```
+
+```{r}
+# Columns with the first and last forces in each direction
+noforces  <- 1:8
+f_v_1_left     <- which(colnames(dataset) == "F_V_PRO_1_left")
+f_v_101_left   <- which(colnames(dataset) == "F_V_PRO_101_left")
+f_ap_1_left    <- which(colnames(dataset) == "F_AP_PRO_1_left")
+f_ap_101_left  <- which(colnames(dataset) == "F_AP_PRO_101_left")
+f_ml_1_left    <- which(colnames(dataset) == "F_ML_PRO_1_left")
+f_ml_101_left  <- which(colnames(dataset) == "F_ML_PRO_101_left")
+
+f_v_1_right     <- which(colnames(dataset) == "F_V_PRO_1_right")
+f_v_101_right   <- which(colnames(dataset) == "F_V_PRO_101_right")
+f_ap_1_right    <- which(colnames(dataset) == "F_AP_PRO_1_right")
+f_ap_101_right  <- which(colnames(dataset) == "F_AP_PRO_101_right")
+f_ml_1_right    <- which(colnames(dataset) == "F_ML_PRO_1_right")
+f_ml_101_right  <- which(colnames(dataset) == "F_ML_PRO_101_right")
+```
+
+# Confidence interval by direction
+
+```{r}
+# Confidence interval by direction for left side
+
+library(dplyr)
+library(tidyr)
+
+ci_forces_v_left  <- ci_forces(dataset, f_v_1_left:f_v_101_left) %>% mutate(DIRECTION = "V")
+ci_forces_ap_left <- ci_forces(dataset, f_ap_1_left:f_ap_101_left) %>% mutate(DIRECTION = "AP")
+ci_forces_ml_left <- ci_forces(dataset, f_ml_1_left:f_ml_101_left) %>% mutate(DIRECTION = "ML")
+
+ci_forces_v_right  <- ci_forces(dataset, f_v_1_right:f_v_101_right) %>% mutate(DIRECTION = "V")
+ci_forces_ap_right <- ci_forces(dataset, f_ap_1_right:f_ap_101_right) %>% mutate(DIRECTION = "AP")
+ci_forces_ml_right <- ci_forces(dataset, f_ml_1_right:f_ml_101_right) %>% mutate(DIRECTION = "ML")
+
+ci_forces_3D_left <- rbind(ci_forces_v_left, ci_forces_ap_left, ci_forces_ml_left)
+
+
+ci_forces_3D_right <- rbind(ci_forces_v_right, ci_forces_ap_right, ci_forces_ml_right)
+```
+
+```{r}
+library(ggplot2)
+# Plot confidence intervals for left
+ci_forces_3D_left %>% filter(CLASS_LABEL %in% c("H","K")) %>%
+  ggplot(aes(x = TIME, y = VALUE, color = CLASS_LABEL)) + 
+  geom_line() + 
+  facet_grid(DIRECTION ~ TYPE, scales = "free_y") +
+  ggtitle("Left GRF")
+
+# Plot confidence intervals for right
+ci_forces_3D_right %>% filter(CLASS_LABEL %in% c("H","K")) %>%
+  ggplot(aes(x = TIME, y = VALUE, color = CLASS_LABEL)) + 
+  geom_line() + 
+  facet_grid(DIRECTION ~ TYPE, scales = "free_y") +
+  ggtitle("Right GRF")
+```
+
+
+
+```{r}
+
+ci_forces_3D_left %>% filter(CLASS_LABEL %in% c("A","C")) %>%
+  ggplot(aes(x = TIME, y = VALUE, color = CLASS_LABEL)) + 
+  geom_line() + facet_grid(DIRECTION ~ TYPE, scales = "free_y") +
+  ggtitle("Left Class")
+
+ci_forces_3D_right %>% filter(CLASS_LABEL %in% c("A","C")) %>%
+  ggplot(aes(x = TIME, y = VALUE, color = CLASS_LABEL)) + 
+  geom_line() + facet_grid(DIRECTION ~ TYPE, scales = "free_y") +
+  ggtitle("Right Class")
+
+
+```
+
+## Training and test sets
+The metadata file includes a column that defines whether a subject's GRF belongs 
+to the training set or the test set. It is important to maintain this partition
+to ensure comparability between different studies. The following chunk of code
+creates the 303-columns matrices *xtest* and *xtrain* with the GRF in vertical, 
+anteroposterior, and mediolateral directions.
+
+```{r}
+# Training set
+trainset <- dataset %>% filter(TRAIN_BALANCED == 1)
+# Predictors for the training set
+xtrain <- trainset %>% select(-SUBJECT_ID, -CLASS_LABEL, -AFFECTED_SIDE,
+                         -SESSION_ID, -TRIAL_ID, -SESSION_TYPE, 
+                         -TRAIN_BALANCED, -TEST) %>% as.matrix()
+# Class for the training set                   
+ytrain <- trainset$CLASS_LABEL
+  
+## Test set
+testset <- dataset %>% filter(TEST == 1)
+# Predictors for the test set
+xtest <- testset %>% select(-SUBJECT_ID, -CLASS_LABEL, -AFFECTED_SIDE,
+                            -SESSION_ID, -TRIAL_ID, -SESSION_TYPE, 
+                            -TRAIN_BALANCED, -TEST) %>% as.matrix()
+# Class for the test set                   
+ytest <- testset$CLASS_LABEL
+```
+
+
+## Principal component analysis (PCA)
+The following code calculates of principal components of GRF used for training.
+
+```{r, echo=TRUE, results='hide', error=FALSE, warning=FALSE, message=FALSE}
+# Principal component analysis
+xtrain_pca <- prcomp(xtrain)
+# Cumulative standard deviation
+cumsdev <- cumsum(xtrain_pca$sdev/sum(xtrain_pca$sdev))
+# Minimum number of columns required to explain 95% of the variability
+max_pca_col <- min(which(cumsdev >= 0.95))
+ztrain <- xtrain_pca$x[,1:max_pca_col]
+```
+
+```{r}
+# Plot the cumulative standard deviation
+data.frame(n = 1:303, cumsdev) %>% ggplot(aes(n,cumsdev)) + 
+  scale_y_continuous(trans='log2') + geom_point() 
+```
+
+## Principal component analysis for the test set. 
+
+```{r, echo=TRUE, results='hide', error=FALSE, warning=FALSE, message=FALSE}
+# Principal component analysis
+pca_test <- prcomp(xtest)
+# Cumulative standard deviation
+cumsdev <- cumsum(pca_test$sdev/sum(pca_test$sdev))
+# Reduced set of features
+ztest <- pca_test$x[,1:max_pca_col]
+```
+
+
+### K-nearest neighbors model
+
+The confusion matrix for kNN model shows that no matter the musculoskeletal disorder (A, C, H, or K), a participant is very likely to be classified as a healthy control (fourth row of the confusion matrix). This means that the classes (A, C, H, and K) have high specificity but very low sensitivity. Similarly, most HCs are classified as calcaneal injuries (fourth column of the confusion matrix).
+
+```{r, echo=TRUE, error=FALSE, warning=FALSE, message=FALSE}
+# k-nearest neighbors
+library(caret)
+model_knn <- train(ztrain, ytrain, method = "knn", 
+                   tuneGrid = data.frame(k = seq(5, 70, 5)))
+yhat_knn <- predict(model_knn, ztest)
+cm_knn <- confusionMatrix(yhat_knn, ytest)
+acc_knn <- cm_knn$overall["Accuracy"]
+print(cm_knn)
+```
+
+### Random forest model
+The following code calculates and validates a RF model. In the sake 
+of computation time, the *Rborist* function was used instead of *train*.
+
+```{r, echo=TRUE, error=FALSE, warning=FALSE, message=FALSE}
+# Random forest
+library(Rborist)
+model_rf <- Rborist(ztrain, ytrain)
+yhat_rf <- predict(model_rf, ztest)
+cm_rf <- confusionMatrix(yhat_rf$yPred, ytest)
+acc_rf <- cm_rf$overall["Accuracy"]
+print(cm_rf)
+```
+
+The confusion matrix above shows that the RF model performs as poorly as the  kNN model. The RF, despite its complexity, increased the overall accuracy only  from `r acc_knn` to `r acc_rf`.
+```{r}
+install.packages("C:/Users/srika/Dropbox/PC/Downloads/keras_2.13.0.zip", repos = NULL, type = "win.binary")
+```
+
+
+## Simple statistics as training features
+This section presents a kNN model and a RF model, both trained using the mean, 
+standard deviation, and maximum GRF in each direction (vertical, 
+anteroposterior, and mediolateral).
+
+```{r, echo=TRUE, results='hide', error=FALSE, warning=FALSE, message=FALSE}
+library(matrixStats)
+# Function that returns the statistical moments
+get_statistical_predictors <- function(x) {
+  data.frame(mean_f  = rowMeans(x[,1:101]), 
+             mean_ap = rowMeans(x[,102:202]), 
+             mean_ml = rowMeans(x[,203:303]), 
+             sd_f    = rowSds(x[,1:101]),
+             sd_ap   = rowSds(x[,102:202]),
+             sd_ap   = rowSds(x[,203:303]),
+             max_f   = rowMaxs(x[,1:101]),
+             max_ap  = rowMaxs(x[,102:202]),   
+             max_ml  = rowMaxs(x[,203:303]))
+}
+
+# Statistical moments for the training set
+mtrain <- get_statistical_predictors(xtrain)
+
+# Statistical moments for the test set
+mtest <- get_statistical_predictors(xtest)
+```
+
+
+### K-nearest neighbors model
+The confusion matrix shows that the specificities of the kNN model trained with 
+simple statistics are higher than those of the model trained with PCA. The 
+greatest improvement in specificity is obtained for the HC class.
+
+```{r, echo=TRUE, error=FALSE, warning=FALSE, message=FALSE}
+# k-nearest neighbors
+model_knn2 <- train(mtrain, ytrain, method = "knn", 
+                    tuneGrid = data.frame(k = seq(5, 70, 5)))
+yhat_knn2 <- predict(model_knn2, mtest)
+cm_knn2 <- confusionMatrix(yhat_knn2, ytest)
+acc_knn2 <- cm_knn2$overall["Accuracy"]
+print(cm_knn2)
+```
+
+With respect to PCA, the model trained with simple statistics increased the 
+overall accuracy from `r acc_knn` to `r acc_knn2`.
+
+### Random forest model
+The following code calculates and validates a RF model whose training
+features are the mean, standard deviation, and maximum of the GRF.
+
+```{r, echo=TRUE, error=FALSE, warning=FALSE, message=FALSE}
+# Random forest
+model_rf2 <- Rborist(mtrain, ytrain)
+yhat_rf2 <- predict(model_rf2, mtest)
+cm_rf2 <- confusionMatrix(yhat_rf2$yPred, ytest)
+acc_rf2 <- cm_rf2$overall["Accuracy"]
+print(cm_rf2)
+```
+
+The confusion matrix shows that the specificities of the RF model 
+trained with simple statistics outperform the models trained with PCA. Like 
+kNN models, the greatest improvement in specificity is obtained for the HC 
+class. 
+
+```{r}
+# Save xtrain to a CSV file
+write.csv(xtrain, file = "xtrain.csv", row.names = FALSE)
+
+# Save xtest to a CSV file
+write.csv(xtest, file = "xtest.csv", row.names = FALSE)
+
+# Save ytrain to a CSV file
+write.csv(ytrain, file = "ytrain.csv", row.names = FALSE)
+
+# Save ytest to a CSV file
+write.csv(ytest, file = "ytest.csv", row.names = FALSE)
+
+```
+
+```{r}
+# Save mtrain to a CSV file
+write.csv(mtrain, file = "mtrain.csv", row.names = FALSE)
+
+# Save mtest to a CSV file
+write.csv(mtest, file = "mtest.csv", row.names = FALSE)
+```
+
+
+
+
+```{r}
+library(reticulate)
+py_config()
+
+```

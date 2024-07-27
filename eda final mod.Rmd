@@ -1,0 +1,194 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+---
+```{r}
+library(randomForest)
+library(class)
+library(e1071)
+library(naivebayes)
+library(keras)
+
+
+# Load the data from CSV files
+mtrain <- read.csv("C:/Users/srika/OneDrive/Documents/xtrain.csv")
+mtest <- read.csv("C:/Users/srika/OneDrive/Documents/xtest.csv")
+y_train <- read.csv("C:/Users/srika/OneDrive/Documents/ytrain.csv")
+y_test <- read.csv("C:/Users/srika/OneDrive/Documents/ytest.csv")
+```
+
+```{r}
+# Extract features and labels
+x_train <- as.matrix(mtrain)
+x_test <- as.matrix(mtest)
+y_train <- y_train$x
+y_test <- y_test$x
+
+# Preprocess labels: Classify K, A, C, H as 1 (GD) and HC as 0
+y_train_processed <- ifelse(y_train %in% c("K", "A", "C", "H"), 1, 0)
+y_test_processed <- ifelse(y_test %in% c("K", "A", "C", "H"), 1, 0)
+
+# Convert string labels to numerical labels
+y_train_encoded <- as.numeric(factor(y_train_processed))
+y_test_encoded <- as.numeric(factor(y_test_processed))
+```
+
+```{r}
+# Define and train KNN model with different k values
+k_values <- c(3, 5, 7, 9)  # You can try different values
+best_k <- NULL
+best_accuracy <- 0
+
+for (k in k_values) {
+  knn_model <- knn(train = x_train, test = x_test, cl = y_train_encoded, k = k, prob = TRUE)
+  knn_predictions <- as.numeric(knn_model)  # Convert predictions to numeric
+  knn_accuracy <- sum(knn_predictions == y_test_encoded) / length(y_test_encoded)
+  
+  if (knn_accuracy > best_accuracy) {
+    best_accuracy <- knn_accuracy
+    best_k <- k
+  }
+}
+
+cat("Best K for KNN:", best_k, "\n")
+cat("Best Accuracy for KNN:", best_accuracy, "\n")
+
+```
+
+```{r}
+# Define and train Random Forest model with different parameters
+num_trees <- c(50, 100, 150)  # You can try different numbers of trees
+best_num_trees <- NULL
+best_accuracy <- 0
+
+for (ntree in num_trees) {
+  rf_model <- randomForest(x = x_train, y = as.factor(y_train_encoded), ntree = ntree)
+  rf_predictions <- as.numeric(predict(rf_model, x_test, type = "response"))  # Convert predictions to numeric
+  rf_accuracy <- sum(rf_predictions == y_test_encoded) / length(y_test_encoded)
+  
+  if (rf_accuracy > best_accuracy) {
+    best_accuracy <- rf_accuracy
+    best_num_trees <- ntree
+  }
+}
+
+cat("Best Number of Trees for Random Forest:", best_num_trees, "\n")
+cat("Best Accuracy for Random Forest:", best_accuracy, "\n")
+
+```
+
+```{r}
+# Define and train SVM model with different kernel functions
+kernel_functions <- c("linear", "radial", "polynomial")  # You can try different kernel functions
+best_kernel <- NULL
+best_accuracy <- 0
+
+for (kernel_func in kernel_functions) {
+  svm_model <- svm(x = x_train, y = as.factor(y_train_encoded), kernel = kernel_func, probability = TRUE)
+  svm_predictions <- as.numeric(predict(svm_model, x_test, probability = TRUE))  # Convert predictions to numeric
+  svm_accuracy <- sum(svm_predictions == y_test_encoded) / length(y_test_encoded)
+  
+  if (svm_accuracy > best_accuracy) {
+    best_accuracy <- svm_accuracy
+    best_kernel <- kernel_func
+  }
+}
+
+cat("Best Kernel Function for SVM:", best_kernel, "\n")
+cat("Best Accuracy for SVM:", best_accuracy, "\n")
+
+```
+
+
+
+
+
+```{r}
+# Define and train CNN model
+num_classes <- length(unique(y_train_encoded))
+y_train_onehot <- to_categorical(y_train_encoded - 1, num_classes = num_classes)
+x_train_cnn <- array_reshape(x_train, c(dim(x_train), 1))
+x_test_cnn <- array_reshape(x_test, c(dim(x_test), 1))
+
+cnn_model <- keras_model_sequential() %>%
+  layer_conv_1d(filters = 32, kernel_size = 3, activation = "relu", input_shape = dim(x_train_cnn)[2:3]) %>%
+  layer_max_pooling_1d(pool_size = 1) %>%
+  layer_conv_1d(filters = 64, kernel_size = 3, activation = "relu") %>%
+  layer_max_pooling_1d(pool_size = 1) %>%
+  layer_conv_1d(filters = 128, kernel_size = 3, activation = "relu") %>%
+  layer_max_pooling_1d(pool_size = 1) %>%
+  layer_conv_1d(filters = 256, kernel_size = 3, activation = "relu") %>%
+  layer_max_pooling_1d(pool_size = 1) %>%
+  layer_conv_1d(filters = 512, kernel_size = 3, activation = "relu") %>%
+  layer_max_pooling_1d(pool_size = 1) %>%
+  layer_conv_1d(filters = 1024, kernel_size = 3, activation = "relu") %>%
+  layer_max_pooling_1d(pool_size = 1) %>%
+  layer_flatten() %>%
+  layer_dense(units = 512, activation = "relu") %>%
+  layer_dense(units = 256, activation = "relu") %>%
+  layer_dense(units = 128, activation = "relu") %>%
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = num_classes, activation = "softmax")
+
+cnn_model %>% compile(
+  optimizer = optimizer_adam(),
+  loss = "binary_crossentropy",
+  metrics = c("accuracy")
+)
+
+# Early stopping
+callback <- callback_early_stopping(monitor = "val_loss", patience = 50)
+
+# Train CNN model
+history <- cnn_model %>% fit(
+  x_train_cnn, y_train_onehot, 
+  epochs = 100, batch_size = 16, 
+  validation_split = 0.2, callbacks = list(callback)
+)
+
+# Evaluate CNN model
+cnn_predictions <- cnn_model %>% predict(x_test_cnn)
+```
+```{r}
+
+# Evaluate CNN model
+cnn_predictions <- cnn_model %>% predict(x_test_cnn)
+```
+
+
+```{r}
+# Evaluate KNN model
+knn_accuracy <- sum(knn_predictions == y_test_encoded) / length(y_test_encoded)
+cat("KNN Accuracy:", knn_accuracy, "\n")
+
+# Evaluate Random Forest model
+rf_accuracy <- sum(rf_predictions == y_test_encoded) / length(y_test_encoded)
+cat("Random Forest Accuracy:", rf_accuracy, "\n")
+
+# Evaluate SVM model
+svm_accuracy <- sum(svm_predictions == y_test_encoded) / length(y_test_encoded)
+cat("SVM Accuracy:", svm_accuracy, "\n")
+
+# Evaluate CNN model
+cnn_accuracy <- sum(apply(cnn_predictions, 1, which.max) == y_test_encoded) / length(y_test_encoded)
+cat("CNN Accuracy:", cnn_accuracy, "\n")
+
+```
+
+
+```{r}
+# Ensemble Predictions
+ensemble_predictions <- (knn_predictions + rf_predictions + svm_predictions + cnn_predictions) / 4
+
+weighted_avg_predictions <- (knn_predictions * knn_accuracy + rf_predictions * rf_accuracy + svm_predictions * svm_accuracy) / (knn_accuracy + rf_accuracy + svm_accuracy)
+ensemble_binary_predictions <- ifelse(weighted_avg_predictions >= 0.5, 1, 0)
+
+# Calculate accuracy of the ensemble model
+ensemble_accuracy <- sum(ensemble_binary_predictions == y_test_encoded) / length(y_test_encoded)
+
+cat("Accuracy for Ensemble Model:", ensemble_accuracy, "\n")
+
+```
